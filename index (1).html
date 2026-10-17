@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0f172a">
+<title>Sonic OBD2</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding-bottom:70px}
+h1{font-size:18px;margin:0;padding:14px}
+.c{background:#1e293b;border-radius:12px;margin:10px;padding:12px}
+button{background:#2563eb;color:#fff;border:0;border-radius:10px;padding:12px 14px;font-size:15px;margin:4px 4px 4px 0}
+button.r{background:#dc2626}button.g{background:#475569}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#020617}
+nav button{flex:1;border-radius:0;background:none;margin:0;padding:16px 4px}
+nav button.on{color:#38bdf8;border-top:2px solid #38bdf8}
+section{display:none}section.on{display:block}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.v{background:#0f172a;border-radius:10px;padding:10px}.v b{font-size:22px;display:block}.v small{color:#94a3b8}
+.w{color:#fbbf24}.bad{color:#f87171}.ok{color:#4ade80}
+input{background:#0f172a;color:#fff;border:1px solid #334155;border-radius:8px;padding:8px;width:90px}
+pre{white-space:pre-wrap;font-size:12px;color:#94a3b8}
+</style></head><body>
+<h1>🚗 Sonic 2015 LT · OBD2 <span id="st" class="w">desconectado</span></h1>
+<section id="s1" class="on">
+<div class="c"><button onclick="conectar()">Conectar adaptador</button>
+<small>Adaptador ELM327 Bluetooth <b>BLE (4.0)</b>. Android + Chrome.</small></div>
+<div class="c"><button onclick="leerDTC()">Leer fallas</button>
+<button class="r" onclick="borrar()">Borrar check engine</button>
+<div id="dtc">—</div></div>
+<div class="c"><pre id="log"></pre></div>
+</section>
+<section id="s2"><div class="c"><button onclick="live(true)">▶ Iniciar</button><button class="g" onclick="live(false)">■ Parar</button></div>
+<div class="c g2" id="grid"></div><div class="c" id="alr">Sin alertas</div></section>
+<section id="s3"><div class="c">Kilometraje actual: <input id="km" type="number" onchange="mant()"> km</div>
+<div class="c" id="mt"></div></section>
+<nav><button class="on" onclick="tab(1,this)">Fallas</button><button onclick="tab(2,this)">En vivo</button><button onclick="tab(3,this)">Mantenim.</button></nav>
+<script>
+const $=i=>document.getElementById(i);
+function tab(n,b){document.querySelectorAll('section').forEach(s=>s.classList.remove('on'));$('s'+n).classList.add('on');document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on')}
+const log=t=>{$('log').textContent=(t+'\n'+$('log').textContent).slice(0,1500)};
+let W,buf='',res=null,q=Promise.resolve(),run=false;
+async function conectar(){
+ try{
+  const d=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:[0xfff0,0xffe0,0x18f0,0xae00]});
+  const s=await d.gatt.connect();let N;
+  for(const sv of await s.getPrimaryServices())for(const c of await sv.getCharacteristics()){
+   if(c.properties.notify&&!N)N=c;if((c.properties.write||c.properties.writeWithoutResponse)&&!W)W=c}
+  await N.startNotifications();
+  N.addEventListener('characteristicvaluechanged',e=>{
+   buf+=new TextDecoder().decode(e.target.value);
+   if(buf.includes('>')){const r=res;res=null;if(r)r(buf.replace('>','').trim())}});
+  d.addEventListener('gattserverdisconnected',()=>{$('st').textContent='desconectado';$('st').className='w';run=false});
+  for(const c of['ATZ','ATE0','ATL0','ATS0','ATH0','ATSP0'])await cmd(c);
+  const r=await cmd('0100');log('Init: '+r);
+  $('st').textContent='conectado';$('st').className='ok';
+ }catch(e){log('Error: '+e.message)}}
+function cmd(c){q=q.then(()=>new Promise(async ok=>{
+ buf='';const t=setTimeout(()=>{res=null;ok(buf)},5000);res=v=>{clearTimeout(t);ok(v)};
+ const d=new TextEncoder().encode(c+'\r');
+ try{for(let i=0;i<d.length;i+=20){const p=d.slice(i,i+20);
+  W.properties.writeWithoutResponse?await W.writeValueWithoutResponse(p):await W.writeValue(p)}}catch(e){clearTimeout(t);ok('')}
+}));return q}
+const hex=r=>r.replace(/\d:/g,'').replace(/SEARCHING\.\.\.|[^0-9A-F]/gi,'').toUpperCase();
+const ND={P0300:'Fallo de encendido aleatorio',P0301:'Fallo cilindro 1',P0302:'Fallo cilindro 2',P0303:'Fallo cilindro 3',P0304:'Fallo cilindro 4',P0171:'Mezcla pobre (banco 1)',P0172:'Mezcla rica (banco 1)',P0420:'Eficiencia catalizador baja',P0128:'Termostato / temp. baja',P0101:'Sensor MAF fuera de rango',P0113:'Sensor temp. aire admisión alto',P0335:'Sensor cigüeñal (CKP)',P0340:'Sensor árbol de levas (CMP)',P0442:'Fuga pequeña EVAP',P0455:'Fuga grande EVAP / tapa de combustible',P0562:'Voltaje del sistema bajo',P0700:'Falla en transmisión (ver TCM)'};
+function dtcs(r,m){const h=hex(r);const i=h.indexOf(m);if(i<0)return[];let b=h.slice(i+2).match(/../g)||[];if(b.length%2)b.shift();
+ const o=[];for(let k=0;k+1<b.length;k+=2){const a=parseInt(b[k],16),c=b[k+1];if(!a&&c=='00')continue;
+  o.push('PCBU'[a>>6]+((a>>4)&3)+(a&15).toString(16).toUpperCase()+c)}return o}
+async function leerDTC(){
+ const mil=hex(await cmd('0101'));const j=mil.indexOf('4101');let h='';
+ if(j>=0){const a=parseInt(mil.substr(j+4,2),16);h=`MIL: ${a&128?'ENCENDIDA':'apagada'} · ${a&127} falla(s)<br>`}
+ const f=[...new Set([...dtcs(await cmd('03'),'43'),...dtcs(await cmd('07'),'47')])];
+ $('dtc').innerHTML=h+(f.length?f.map(x=>`<p class="bad"><b>${x}</b> ${ND[x]||'Buscar código en manual GM'}</p>`).join(''):'<p class="ok">Sin fallas</p>')}
+async function borrar(){if(!confirm('¿Borrar fallas y apagar check engine? Se pierden datos de freeze frame.'))return;
+ log('Borrar: '+await cmd('04'));leerDTC()}
+const P=[['0C','RPM',(a,b)=>(a*256+b)/4,'rpm'],['0D','Velocidad',a=>a,'km/h'],['05','Refrigerante',a=>a-40,'°C'],['04','Carga',a=>a*100/255,'%'],['0F','Aire adm.',a=>a-40,'°C'],['11','Acelerador',a=>a*100/255,'%'],['06','Trim corto',a=>(a-128)*100/128,'%'],['07','Trim largo',a=>(a-128)*100/128,'%'],['10','MAF',(a,b)=>(a*256+b)/100,'g/s'],['0B','MAP',a=>a,'kPa'],['0E','Avance',a=>a/2-64,'°']];
+const V={};
+async function live(on){run=on;if(!on)return;
+ $('grid').innerHTML=P.map(p=>`<div class="v"><small>${p[1]}</small><b id="p${p[0]}">–</b></div>`).join('')+'<div class="v"><small>Batería</small><b id="pV">–</b></div>';
+ while(run){for(const p of P){const h=hex(await cmd('01'+p[0]));const i=h.indexOf('41'+p[0]);if(i<0)continue;
+   const a=parseInt(h.substr(i+4,2),16),b=parseInt(h.substr(i+6,2),16)||0;V[p[0]]=p[2](a,b);
+   $('p'+p[0]).textContent=V[p[0]].toFixed(p[3]=='rpm'?0:1)+' '+p[3]}
+  const v=parseFloat(await cmd('ATRV'));if(v){V.v=v;$('pV').textContent=v+' V'}alertas()}}
+function alertas(){const a=[];
+ if(V['05']>105)a.push('Refrigerante alto: riesgo de sobrecalentamiento');
+ if(V['05']<70&&V['05']>0)a.push('Motor frío o termostato abierto (P0128)');
+ if(Math.abs(V['07'])>10)a.push('Trim largo fuera de ±10%: revisar fugas de vacío, MAF o inyectores');
+ if(V.v&&V['0C']>500&&(V.v<13||V.v>15))a.push('Voltaje de carga anormal: revisar alternador/batería');
+ if(V.v&&V['0C']<100&&V.v<12.2)a.push('Batería baja');
+ $('alr').innerHTML=a.length?a.map(x=>'<p class="w">⚠ '+x+'</p>').join(''):'<span class="ok">Sin alertas</span>'}
+const M0=[['Aceite y filtro',7500],['Filtro de aire',15000],['Bujías',40000],['Pastillas de freno',30000],['Refrigerante',40000],['Líquido de frenos',40000],['Filtro de combustible',40000]];
+let M=JSON.parse(localStorage.getItem('m')||'null')||M0.map(x=>({n:x[0],i:x[1],l:0}));
+function mant(){const k=+$('km').value||0;localStorage.setItem('k',k);
+ $('mt').innerHTML=M.map((x,j)=>{const r=x.l+x.i-k;return`<p><b>${x.n}</b> <span class="${r<0?'bad':r<1000?'w':'ok'}">${r<0?'vencido hace '+(-r):'faltan '+r} km</span><br><small>cada ${x.i} km · último a los </small><input type="number" value="${x.l}" onchange="M[${j}].l=+this.value;localStorage.setItem('m',JSON.stringify(M));mant()"></p>`}).join('')}
+$('km').value=localStorage.getItem('k')||'';mant();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+</script></body></html>
